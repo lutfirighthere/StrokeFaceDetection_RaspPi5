@@ -1,22 +1,36 @@
-Pre-Stroke Prediction Using Face Detection
-Owen Kim - OpenCV Mini Project
-This project uses OpenCV, dlib, and NumPy to detect facial landmarks and predict potential signs of a stroke based on facial asymmetry. The model specifically evaluates:
+# 🚑 Pre-Stroke Prediction Using Face Detection  
+## **Owen Kim - OpenCV Mini Project**  
 
-Eye Asymmetry - Compares the tilt and closure of both eyes.
-Mouth Angle Deviation - Analyzes mouth angles to detect drooping.
-The program uses facial landmark detection to evaluate eye and mouth symmetry and provides a simple "Stroke" or "No Stroke" prediction.
+This project uses **OpenCV**, **dlib**, and **NumPy** to detect facial landmarks and predict potential signs of a stroke based on **facial asymmetry**. The model specifically evaluates:  
 
-✅ How It Works
-Eye Asymmetry Detection:
+- ✅ **Eye Asymmetry** - Compares the tilt angle and closure of both eyes.  
+- ✅ **Mouth Angle Deviation** - Analyzes the deviation in mouth angles to detect drooping.  
 
-Detects the tilt angle of both eyes.
-Measures the KL divergence (distribution difference) between the upper and lower eyelid.
-Large differences may indicate facial droop, a common stroke symptom.
-Mouth Angle Deviation:
+The program leverages **facial landmark detection** to evaluate eye and mouth symmetry and provides a simple prediction of:  
+- 🟢 **No Stroke** if the face appears symmetrical.  
+- 🔴 **Stroke** if noticeable facial asymmetry is detected.  
 
-Measures the angles formed by the mouth corners and nose bridge.
-Significant deviation in angles may indicate facial asymmetry, often linked to strokes.
-Stroke Prediction:
+---
 
-If mouth angle deviation is high and eye tilt difference is noticeable, the system flags a possible stroke.
-Otherwise, it indicates no stroke.
+## ✅ How It Works  
+
+### **Eye Asymmetry Detection**  
+- Detects the tilt angle of both eyes.  
+- Measures the **KL divergence** (distribution difference) between the upper and lower eyelid.  
+- Large differences in eye closure or tilt may indicate **facial droop**, a common stroke symptom.  
+
+### **Mouth Angle Deviation**  
+- Measures the angles formed by the mouth corners and the nose bridge.  
+- A significant deviation in mouth angles could indicate **facial asymmetry**, often linked to strokes.  
+
+### **Stroke Prediction**  
+- If the mouth angle deviation is **high** and the eye tilt difference is **noticeable**, the system flags a possible stroke.  
+- Otherwise, it classifies the face as **No Stroke**.  
+
+---
+
+## 💻 Run the Project  
+
+### ✅ Option 1: With From photos in folders
+### ✅ Option 2: With Webcam (Live Feed)  
+
