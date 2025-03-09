@@ -1,5 +1,10 @@
-# 🚑 Pre-Stroke Prediction Using Face Detection  
+# 🚑 Pre-Stroke Prediction Using Face Detection
 ## **Owen Kim - OpenCV Mini Project**  
+
+Stroke is the **third** leading cause of death globally.  
+Early detection of **facial drooping** — a common symptom of a stroke — can significantly increase the chances of **survival and recovery**.  
+
+By providing **real-time stroke prediction**, this project aims to showcase how **AI and computer vision** can contribute to **early medical intervention** and potentially **save lives**.  
 
 This project uses **OpenCV**, **dlib**, and **NumPy** to detect facial landmarks and predict potential signs of a stroke based on **facial asymmetry**. The model specifically evaluates:  
 
