@@ -34,3 +34,9 @@ The program leverages **facial landmark detection** to evaluate eye and mouth sy
 ### ✅ Option 1: With From photos in folders
 ### ✅ Option 2: With Webcam (Live Feed)  
 
+---
+
+## Drew Inspiration from this research paper
+### Prehospital Cerebrovascular Accident Detection using Artificial Intelligence Powered Mobile Devices
+https://www.researchgate.net/publication/346063581_Prehospital_Cerebrovascular_Accident_Detection_using_Artificial_Intelligence_Powered_Mobile_Devices
+
