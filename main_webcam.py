@@ -1,19 +1,14 @@
-## Owen Kim OpenCV mini project (Picamera2 version for Raspberry Pi 5)
-## Pre-stroke prediction based on face detection and head pose estimation.
-
 from picamera2 import Picamera2
 import cv2 as cv
 import numpy as np
 import dlib
 from scipy.stats import entropy
 
-# Initialize PiCamera2
 picam2 = Picamera2()
 picam2.start()
 
-# Load face detector and landmark predictor
 detector = dlib.get_frontal_face_detector()
-predictor = dlib.shape_predictor("shape_predictor_68_face_landmarks.dat")  # Must be present
+predictor = dlib.shape_predictor("shape_predictor_68_face_landmarks.dat")
 
 def calculate_kl_divergence(upper, lower):
     hist_upper, _ = np.histogram(upper[:, 0], bins=10, range=(0, 1), density=True)
@@ -84,12 +79,26 @@ def face_landmarks(img):
     for face in faces:
         landmarks = predictor(gray, face)
 
-        # Mouth angle
+        # --- Mouth: lines first, then dots on top ---
         x1, y1 = landmarks.part(48).x, landmarks.part(48).y
         x2, y2 = landmarks.part(54).x, landmarks.part(54).y
         x3, y3 = landmarks.part(30).x, landmarks.part(30).y
-        x4, y4 = landmarks.part(28).x, landmarks.part(28).y
 
+        mouth_pts = [(x1, y1), (x3, y3), (x2, y2)]
+        # Draw blue lines first (triangle)
+        cv.line(img, mouth_pts[0], mouth_pts[1], (255, 0, 0), 2)
+        cv.line(img, mouth_pts[1], mouth_pts[2], (255, 0, 0), 2)
+        cv.line(img, mouth_pts[2], mouth_pts[0], (255, 0, 0), 2)
+        # Draw neon green dots on top
+        for pt in mouth_pts:
+            cv.circle(img, pt, 4, (0, 255, 0), -1)
+
+        # Optionally: draw angle label
+        cv.putText(img, f"Mouth angle: {np.abs(np.degrees(np.arctan2(y2-y1, x2-x1))):.2f}",
+                   (x2+10, y2), cv.FONT_HERSHEY_SIMPLEX, 0.5, (200, 255, 255), 1)
+
+        # --- Your existing calculation/logic ---
+        x4, y4 = landmarks.part(28).x, landmarks.part(28).y
         A, B, C, D = np.array([x1, y1]), np.array([x2, y2]), np.array([x3, y3]), np.array([x4, y4])
         AD, AC = D - A, C - A
         BD, BC = D - B, C - B
@@ -97,7 +106,6 @@ def face_landmarks(img):
         angle_degrees_CBD = np.degrees(np.arccos(np.dot(BD, BC) / (np.linalg.norm(BD) * np.linalg.norm(BC))))
         S_mouthangle = np.abs(angle_degrees_CBD - angle_degrees_DAC)
 
-        # Eyes
         kl_left, tilt_left = process_eye_landmarks(landmarks, img, left=True)
         kl_right, tilt_right = process_eye_landmarks(landmarks, img, left=False)
         eye_tilt_diff = abs(tilt_left - tilt_right)
@@ -109,7 +117,6 @@ def face_landmarks(img):
         yaw, pitch, roll = estimate_head_pose(landmarks, img)
         cv.putText(img, f"Yaw: {yaw:.2f}", (10, 230), cv.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1)
 
-        # Logic
         if abs(yaw) > 30:
             cv.putText(img, "angle too large", (50, 50), cv.FONT_HERSHEY_COMPLEX, 0.5, (0, 255, 255), 1)
         elif norm_mouth < 0.035 and norm_eyes < 0.02:
@@ -117,13 +124,16 @@ def face_landmarks(img):
         else:
             cv.putText(img, "stroke", (50, 50), cv.FONT_HERSHEY_COMPLEX, 0.5, (0, 0, 255), 1)
 
-# Main loop
-while True:
-    frame = picam2.capture_array()
-    frame = cv.flip(frame, 1)
-    face_landmarks(frame)
-    cv.imshow("Face Landmarks", frame)
-    if cv.waitKey(1) == 27:
-        break
-
-cv.destroyAllWindows()
+try:
+    while True:
+        frame = picam2.capture_array()
+        frame = cv.flip(frame, 1)
+        face_landmarks(frame)
+        cv.imshow("Face Landmarks", frame)
+        if cv.waitKey(1) == 27:
+            break
+except KeyboardInterrupt:
+    print("Keyboard interrupt detected, exiting cleanly.")
+finally:
+    cv.destroyAllWindows()
+    picam2.stop()
