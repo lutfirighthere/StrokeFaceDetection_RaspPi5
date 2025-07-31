@@ -117,7 +117,7 @@ def face_landmarks(img):
         yaw, pitch, roll = estimate_head_pose(landmarks, img)
         cv.putText(img, f"Yaw: {yaw:.2f}", (10, 230), cv.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1)
 
-        if abs(yaw) > 30:
+        if abs(yaw) > 17.5:
             cv.putText(img, "angle too large", (50, 50), cv.FONT_HERSHEY_COMPLEX, 0.5, (0, 255, 255), 1)
         elif norm_mouth < 0.035 and norm_eyes < 0.02:
             cv.putText(img, "no stroke", (50, 50), cv.FONT_HERSHEY_COMPLEX, 0.5, (0, 255, 0), 1)
