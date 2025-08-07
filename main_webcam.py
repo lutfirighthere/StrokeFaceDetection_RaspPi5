@@ -8,21 +8,25 @@ import time
 from collections import deque
 from picamera2 import Picamera2
 
+# --- GUI Imports ---
+import tkinter as tk
+from PIL import Image, ImageTk
+
 # --- Configuration & Enhancements ---
-DEBUG = True
 SHAPE_PREDICTOR_PATH = "shape_predictor_68_face_landmarks.dat"
+DEBUG = True
 
-# 1. ENHANCEMENT: Frame-to-Frame Stability (Debouncing)
-# We use a deque to store the status of the last N frames.
-STATUS_BUFFER_SIZE = 15  # Use last 15 frames for stability
-STATUS_CONFIRMATION_THRESHOLD = 10 # At least 10 of the last 15 frames must agree
+# Frame-to-Frame Stability (Debouncing)
+STATUS_BUFFER_SIZE = 15
+STATUS_CONFIRMATION_THRESHOLD = 9
 
-# 2. ENHANCEMENT: Adaptive Thresholds
-# Base thresholds for a front-facing person
-HEAD_TILT_THRESHOLD = 17.0  # Degrees for roll/tilt (slightly increased)
-MOUTH_ASYMMETRY_THRESHOLD = 0.07 # Normalized score
-EYE_ASYMMETRY_THRESHOLD = 0.12   # Normalized score (ratio of EARs)
-
+# --- Thresholds to Tune ---
+HEAD_TILT_THRESHOLD = 17.0
+MOUTH_ASYMMETRY_THRESHOLD = 0.03
+EYE_ASYMMETRY_THRESHOLD = 0.7
+# **ACTION REQUIRED**: This is the value you need to find and adjust!
+# Run the script, observe the printed ratio, and set this value accordingly.
+TONGUE_OUT_THRESHOLD = 0.35
 
 # --- Utility Functions ---
 
@@ -31,10 +35,9 @@ def download_and_extract_shape_predictor():
     if os.path.exists(SHAPE_PREDICTOR_PATH):
         if DEBUG: print(f"'{SHAPE_PREDICTOR_PATH}' already exists.")
         return
-    
+
     url = "http://dlib.net/files/shape_predictor_68_face_landmarks.dat.bz2"
     print(f"Downloading '{SHAPE_PREDICTOR_PATH}' from {url}...")
-    
     try:
         req = requests.get(url, stream=True)
         req.raise_for_status()
@@ -62,21 +65,37 @@ def get_mouth_asymmetry(landmarks):
     nose_tip = np.array([landmarks.part(30).x, landmarks.part(30).y])
     left_mouth_corner = np.array([landmarks.part(48).x, landmarks.part(48).y])
     right_mouth_corner = np.array([landmarks.part(54).x, landmarks.part(54).y])
-    
     dist_left = abs(left_mouth_corner[1] - nose_tip[1])
     dist_right = abs(right_mouth_corner[1] - nose_tip[1])
     asymmetry_raw = abs(dist_left - dist_right)
-    
     face_width = np.linalg.norm(np.array([landmarks.part(0).x, landmarks.part(0).y]) - np.array([landmarks.part(16).x, landmarks.part(16).y]))
     return asymmetry_raw / face_width if face_width > 0 else 0
 
+def is_tongue_out(landmarks):
+    """Detects if the tongue is sticking out using a ratio of inner mouth height to outer mouth width."""
+    inner_lip_top = np.array([landmarks.part(62).x, landmarks.part(62).y])
+    inner_lip_bottom = np.array([landmarks.part(66).x, landmarks.part(66).y])
+    inner_mouth_height = np.linalg.norm(inner_lip_top - inner_lip_bottom)
 
-# --- 3D Head Pose Estimation ---
+    mouth_corner_left = np.array([landmarks.part(48).x, landmarks.part(48).y])
+    mouth_corner_right = np.array([landmarks.part(54).x, landmarks.part(54).y])
+    outer_mouth_width = np.linalg.norm(mouth_corner_left - mouth_corner_right)
+    
+    if outer_mouth_width == 0:
+        return False
+
+    ratio = inner_mouth_height / outer_mouth_width
+    
+    # This print will help you find the correct threshold
+    print(f"Tongue Ratio: {ratio:.4f}")
+    
+    return ratio > TONGUE_OUT_THRESHOLD
+
+# --- 3D Head Pose Estimation & Drawing ---
 
 def estimate_head_pose(landmarks, frame_shape):
     """Estimates head pose (yaw, pitch, roll)."""
     h, w = frame_shape[:2]
-    
     model_points = np.array([
         (0.0, 0.0, 0.0), (0.0, -330.0, -65.0), (-225.0, 170.0, -135.0),
         (225.0, 170.0, -135.0), (-150.0, -150.0, -125.0), (150.0, -150.0, -125.0)
@@ -86,146 +105,144 @@ def estimate_head_pose(landmarks, frame_shape):
         (landmarks.part(36).x, landmarks.part(36).y), (landmarks.part(45).x, landmarks.part(45).y),
         (landmarks.part(48).x, landmarks.part(48).y), (landmarks.part(54).x, landmarks.part(54).y)
     ], dtype="double")
-    
     focal_length = w
     center = (w / 2, h / 2)
     cam_matrix = np.array([[focal_length, 0, center[0]], [0, focal_length, center[1]], [0, 0, 1]], dtype="double")
-    dist_coeffs = np.zeros((4, 1))
-    
-    success, rot_vec, trans_vec = cv2.solvePnP(model_points, image_points, cam_matrix, dist_coeffs, flags=cv2.SOLVEPNP_ITERATIVE)
+    _, rot_vec, trans_vec = cv2.solvePnP(model_points, image_points, cam_matrix, np.zeros((4,1)), flags=cv2.SOLVEPNP_ITERATIVE)
     rot_mat, _ = cv2.Rodrigues(rot_vec)
     angles, _, _, _, _, _ = cv2.RQDecomp3x3(rot_mat)
-    yaw, pitch, roll = angles[1], angles[0], angles[2]
-    return yaw, pitch, roll, rot_vec, trans_vec, cam_matrix
-
-
-# --- Drawing & Visualization ---
+    return angles[1], angles[0], angles[2], rot_vec, trans_vec, cam_matrix
 
 def draw_3d_axes(img, rot_vec, trans_vec, cam_matrix, origin_pt):
     """Draws 3D X, Y, Z axes on the image."""
-    axis = np.float32([[50, 0, 0], [0, 50, 0], [0, 0, -50]]).reshape(-1, 3)
+    axis = np.float32([[50,0,0], [0,50,0], [0,0,-50]]).reshape(-1,3)
     img_pts, _ = cv2.projectPoints(axis, rot_vec, trans_vec, cam_matrix, np.zeros((4,1)))
-    o, colors = tuple(np.int32(origin_pt)), [(0, 0, 255), (0, 255, 0), (255, 0, 0)]
-    for i, p in enumerate(img_pts):
-        cv2.line(img, o, tuple(np.int32(p.ravel())), colors[i], 3)
+    o = tuple(np.int32(origin_pt))
+    colors = [(0,0,255),(0,255,0),(255,0,0)] # BGR for Red, Green, Blue axes
+    cv2.line(img, o, tuple(np.int32(img_pts[0].ravel())), colors[0], 3)
+    cv2.line(img, o, tuple(np.int32(img_pts[1].ravel())), colors[1], 3)
+    cv2.line(img, o, tuple(np.int32(img_pts[2].ravel())), colors[2], 3)
 
 def draw_3d_bbox(img, rot_vec, trans_vec, cam_matrix):
     """Draws a 3D bounding box around the face."""
-    box_pts = np.float32([[-75,-100,-50], [75,-100,-50], [75,100,-50], [-75,100,-50], [-75,-100,50], [75,-100,50], [75,100,50], [-75,100,50]])
+    box_pts = np.float32([[-90,-130,-120], [90,-130,-120], [90,110,-120], [-90,110,-120], 
+                             [-90,-130,20], [90,-130,20], [90,110,20], [-90,110,20]])
     img_pts, _ = cv2.projectPoints(box_pts, rot_vec, trans_vec, cam_matrix, np.zeros((4,1)))
-    img_pts = np.int32(img_pts).reshape(-1, 2)
-    cv2.drawContours(img, [img_pts[:4]], -1, (255, 255, 0), 2)
-    cv2.drawContours(img, [img_pts[4:]], -1, (0, 255, 255), 2)
-    for i in range(4): cv2.line(img, tuple(img_pts[i]), tuple(img_pts[i+4]), (255, 0, 255), 2)
+    img_pts = np.int32(img_pts).reshape(-1,2)
+    cv2.drawContours(img, [img_pts[:4]], -1, (255,255,0), 2) # Back plane
+    cv2.drawContours(img, [img_pts[4:]], -1, (0,255,255), 2) # Front plane
+    for i in range(4): cv2.line(img, tuple(img_pts[i]), tuple(img_pts[i+4]), (255,0,255), 2)
 
 def draw_info_panel(img, status, color, yaw, pitch, roll, mouth_asym, eye_asym):
     """Puts all the text information on the screen."""
-    x_offset, y_offset, font, scale = 10, 20, cv2.FONT_HERSHEY_SIMPLEX, 0.6
-    cv2.putText(img, f"Status: {status}", (x_offset, y_offset), font, 0.7, color, 2)
-    y_offset += 30; cv2.putText(img, f"Roll (Tilt): {roll:.1f}", (x_offset, y_offset), font, scale, (255, 255, 0), 1)
-    y_offset += 25; cv2.putText(img, f"Yaw: {yaw:.1f}", (x_offset, y_offset), font, scale, (255, 255, 0), 1)
-    y_offset += 25; cv2.putText(img, f"Mouth Asym: {mouth_asym:.3f}", (x_offset, y_offset), font, scale, (255, 255, 0), 1)
-    y_offset += 25; cv2.putText(img, f"Eye Asym: {eye_asym:.3f}", (x_offset, y_offset), font, scale, (255, 255, 0), 1)
-
+    x, y, font, scale = 10, 20, cv2.FONT_HERSHEY_SIMPLEX, 0.6
+    cv2.putText(img, f"Status: {status}", (x,y), font, 0.7, color, 2)
+    y+=30; cv2.putText(img, f"Roll (Tilt): {roll:.1f}", (x,y), font, scale, (255,255,0), 1)
+    y+=25; cv2.putText(img, f"Yaw: {yaw:.1f}", (x,y), font, scale, (255,255,0), 1)
+    y+=25; cv2.putText(img, f"Mouth Asym: {mouth_asym:.3f}", (x,y), font, scale, (255,255,0), 1)
+    y+=25; cv2.putText(img, f"Eye Asym: {eye_asym:.3f}", (x,y), font, scale, (255,255,0), 1)
 
 # --- Main Processing Function ---
 
 def process_frame(frame, detector, predictor, status_buffer):
-    """Processes a single video frame for detection."""
+    """Processes a single video frame to detect facial states and draw overlays."""
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     faces = detector(gray, 0)
-    
-    # Default values if no face is detected
-    yaw, pitch, roll, mouth_asymmetry, eye_asymmetry = 0, 0, 0, 0, 0
+    yaw, pitch, roll, mouth_asym, eye_asym = 0, 0, 0, 0, 0
     final_status, final_color = "No Face Detected", (100, 100, 100)
 
-    if len(faces) > 0:
-        face = faces[0] # Process only the first detected face
-        landmarks = predictor(gray, face)
+    if faces:
+        landmarks = predictor(gray, faces[0])
         
-        # 1. Calculate Asymmetry Metrics
-        left_eye_pts = np.array([(landmarks.part(i).x, landmarks.part(i).y) for i in range(36, 42)])
-        right_eye_pts = np.array([(landmarks.part(i).x, landmarks.part(i).y) for i in range(42, 48)])
-        ear_left = get_eye_aspect_ratio(left_eye_pts)
-        ear_right = get_eye_aspect_ratio(right_eye_pts)
-        eye_asymmetry = abs(ear_left - ear_right) / max(ear_left, ear_right, 1e-6)
-        mouth_asymmetry = get_mouth_asymmetry(landmarks)
-
-        # 2. Estimate 3D Head Pose
-        yaw, pitch, roll, rot_vec, trans_vec, cam_matrix = estimate_head_pose(landmarks, frame.shape)
+        # --- Calculate All Metrics ---
+        eye_asym = abs(get_eye_aspect_ratio(np.array([(p.x, p.y) for p in landmarks.parts()[36:42]])) - 
+                       get_eye_aspect_ratio(np.array([(p.x, p.y) for p in landmarks.parts()[42:48]])))
+        mouth_asym = get_mouth_asymmetry(landmarks)
+        tongue_detected = is_tongue_out(landmarks)
+        yaw, pitch, roll, rvec, tvec, cam_matrix = estimate_head_pose(landmarks, frame.shape)
         
-        # 3. Decision Logic with Enhancements
-        # Adaptive Thresholds: Make thresholds more lenient if the head is turned
+        # --- Decision Logic with Adaptive Thresholds ---
         rot_factor = max(np.cos(np.radians(abs(yaw))) * np.cos(np.radians(abs(pitch))), 0.5)
-        adj_mouth_th = MOUTH_ASYMMETRY_THRESHOLD / rot_factor
-        adj_eye_th = EYE_ASYMMETRY_THRESHOLD / rot_factor
-
-        is_tilted = abs(roll) > HEAD_TILT_THRESHOLD
-        is_asymmetric = (mouth_asymmetry > adj_mouth_th or eye_asymmetry > adj_eye_th)
+        is_asymmetric = (mouth_asym > MOUTH_ASYMMETRY_THRESHOLD / rot_factor or 
+                         eye_asym > EYE_ASYMMETRY_THRESHOLD / rot_factor)
         
-        # Determine the status for the CURRENT frame
         current_status = "Normal"
-        if is_tilted: current_status = "Head Tilted"
-        elif is_asymmetric: current_status = "Asymmetry Detected"
+        if tongue_detected:
+            current_status = "Tongue Out"
+        elif abs(roll) > HEAD_TILT_THRESHOLD:
+            current_status = "Head Tilted"
+        elif is_asymmetric:
+            current_status = "Asymmetry Detected"
         
-        # Debouncing: Determine the FINAL status based on the buffer
+        # --- Debounce Status for Stability ---
         status_buffer.append(current_status)
-        if status_buffer.count("Asymmetry Detected") >= STATUS_CONFIRMATION_THRESHOLD:
+        if status_buffer.count("Tongue Out") >= STATUS_CONFIRMATION_THRESHOLD:
+            final_status, final_color = "Tongue Out", (0, 165, 255) # Orange
+        elif status_buffer.count("Asymmetry Detected") >= STATUS_CONFIRMATION_THRESHOLD:
             final_status, final_color = "Asymmetry Detected", (0, 0, 255)
         elif status_buffer.count("Head Tilted") >= STATUS_CONFIRMATION_THRESHOLD:
             final_status, final_color = "Head Tilted", (0, 255, 255)
         else:
             final_status, final_color = "Normal", (0, 255, 0)
-            
-        # 4. Draw Visualizations
-        nose_tip_2d = (landmarks.part(30).x, landmarks.part(30).y)
-        draw_3d_axes(frame, rot_vec, trans_vec, cam_matrix, nose_tip_2d)
-        draw_3d_bbox(frame, rot_vec, trans_vec, cam_matrix)
-        for i in range(68): cv2.circle(frame, (landmarks.part(i).x, landmarks.part(i).y), 2, (0, 255, 0), -1)
+        
+        # --- Draw Visualizations ---
+        draw_3d_axes(frame, rvec, tvec, cam_matrix, (landmarks.part(30).x, landmarks.part(30).y))
+        draw_3d_bbox(frame, rvec, tvec, cam_matrix)
+        for i in range(68):
+            cv2.circle(frame, (landmarks.part(i).x, landmarks.part(i).y), 2, (0, 255, 0), -1)
+        if tongue_detected:
+            for i in range(60, 68):
+                cv2.circle(frame, (landmarks.part(i).x, landmarks.part(i).y), 3, (255, 0, 0), -1)
 
-    draw_info_panel(frame, final_status, final_color, yaw, pitch, roll, mouth_asymmetry, eye_asymmetry)
+    draw_info_panel(frame, final_status, final_color, yaw, pitch, roll, mouth_asym, eye_asym)
     return frame
 
-# --- Main Execution ---
+# --- Main Application Class (GUI) ---
 
-def main():
-    download_and_extract_shape_predictor()
-    print("Initializing detectors...")
-    detector = dlib.get_frontal_face_detector()
-    predictor = dlib.shape_predictor(SHAPE_PREDICTOR_PATH)
-    
-    print("Initializing camera...")
-    picam2 = Picamera2()
-    picam2.configure(picam2.create_preview_configuration(main={"size": (640, 480)}))
-    picam2.start()
+class App:
+    def __init__(self, window_title="Facial Asymmetry Detection"):
+        self.root = tk.Tk()
+        self.root.title(window_title)
 
-    # Initialize enhancement variables
-    status_buffer = deque(maxlen=STATUS_BUFFER_SIZE)
-    prev_time = 0
+        download_and_extract_shape_predictor()
+        print("Initializing detectors...")
+        self.detector = dlib.get_frontal_face_detector()
+        self.predictor = dlib.shape_predictor(SHAPE_PREDICTOR_PATH)
+        self.status_buffer = deque(maxlen=STATUS_BUFFER_SIZE)
+        
+        print("Initializing camera...")
+        self.picam2 = Picamera2()
+        self.picam2.configure(self.picam2.create_preview_configuration(main={"size": (640, 480)}))
+        self.picam2.start()
 
-    print("Starting video stream. Press 'ESC' to exit.")
-    try:
-        while True:
-            frame = picam2.capture_array()
-            frame = cv2.cvtColor(frame, cv2.COLOR_RGBA2BGR)
-            frame = cv2.flip(frame, 1)
+        self.canvas = tk.Canvas(self.root, width=640, height=480)
+        self.canvas.pack()
 
-            processed_frame = process_frame(frame, detector, predictor, status_buffer)
+        self.delay = 15 # ms for screen update
+        self.update()
+        
+        self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
+        self.root.mainloop()
 
-            # Calculate and display FPS
-            curr_time = time.time()
-            fps = 1 / (curr_time - prev_time) if (curr_time - prev_time) > 0 else 0
-            prev_time = curr_time
-            cv2.putText(processed_frame, f"FPS: {fps:.1f}", (processed_frame.shape[1] - 80, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 255), 2)
-            
-            cv2.imshow("Facial Asymmetry Detection", processed_frame)
-            if cv2.waitKey(1) & 0xFF == 27: break
-    except KeyboardInterrupt:
-        print("\nExiting cleanly on user interrupt.")
-    finally:
+    def update(self):
+        """Captures a frame, processes it, and displays it on the canvas."""
+        frame = self.picam2.capture_array()
+        frame = cv2.cvtColor(frame, cv2.COLOR_RGBA2BGR)
+        frame = cv2.flip(frame, 1)
+
+        processed_frame = process_frame(frame, self.detector, self.predictor, self.status_buffer)
+        
+        img_rgb = cv2.cvtColor(processed_frame, cv2.COLOR_BGR2RGB)
+        self.photo = ImageTk.PhotoImage(image=Image.fromarray(img_rgb))
+        self.canvas.create_image(0, 0, image=self.photo, anchor=tk.NW)
+        
+        self.root.after(self.delay, self.update)
+
+    def on_closing(self):
+        """Handles graceful shutdown of the camera and GUI."""
         print("Shutting down...")
-        cv2.destroyAllWindows()
-        picam2.stop()
+        self.picam2.stop()
+        self.root.destroy()
 
 if __name__ == '__main__':
-    main()
+    App()
